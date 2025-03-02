@@ -2,7 +2,7 @@ import os
 from kaggle.api.kaggle_api_extended import KaggleApi
 
 # Define the target directory for the dataset
-target_dir = "/gpfs/workdir/islamm/Original_datasets"
+target_dir = "/gpfs/workdir/islamm/datasets"
 os.makedirs(target_dir, exist_ok=True)
 
 # Initialize the Kaggle API
@@ -18,3 +18,4 @@ try:
     print(f"Dataset downloaded to: {target_dir}")
 except Exception as e:
     print(f"Error downloading dataset: {str(e)}")
+
