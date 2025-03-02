@@ -1,0 +1,29 @@
+2025-02-25 12:49:29,762 INFO    MainThread:268725 [wandb_setup.py:_flush():68] Current SDK version is 0.19.4
+2025-02-25 12:49:29,762 INFO    MainThread:268725 [wandb_setup.py:_flush():68] Configure stats pid to 268725
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_setup.py:_flush():68] Loading settings from /gpfs/users/islamm/.config/wandb/settings
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_setup.py:_flush():68] Loading settings from /gpfs/workdir/islamm/wandb_draw/wandb/settings
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_setup.py:_flush():68] Loading settings from environment variables
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_init.py:setup_run_log_directory():624] Logging user logs to /gpfs/workdir/islamm/wandb_draw/wandb/run-20250225_124929-hc15vg89/logs/debug.log
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_init.py:setup_run_log_directory():625] Logging internal logs to /gpfs/workdir/islamm/wandb_draw/wandb/run-20250225_124929-hc15vg89/logs/debug-internal.log
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_init.py:init():743] calling init triggers
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_init.py:init():748] wandb.init called with sweep_config: {}
+config: {}
+2025-02-25 12:49:29,763 INFO    MainThread:268725 [wandb_init.py:init():776] starting backend
+2025-02-25 12:49:30,820 INFO    MainThread:268725 [wandb_init.py:init():780] sending inform_init request
+2025-02-25 12:49:31,166 INFO    MainThread:268725 [backend.py:_multiprocessing_setup():97] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2025-02-25 12:49:31,167 INFO    MainThread:268725 [wandb_init.py:init():795] backend started and connected
+2025-02-25 12:49:31,169 INFO    MainThread:268725 [wandb_init.py:init():888] updated telemetry
+2025-02-25 12:49:31,377 INFO    MainThread:268725 [wandb_init.py:init():915] communicating run to backend with 90.0 second timeout
+2025-02-25 12:49:31,739 INFO    MainThread:268725 [wandb_init.py:init():967] starting run threads in backend
+2025-02-25 12:49:37,232 INFO    MainThread:268725 [wandb_run.py:_console_start():2409] atexit reg
+2025-02-25 12:49:37,232 INFO    MainThread:268725 [wandb_run.py:_redirect():2259] redirect: wrap_raw
+2025-02-25 12:49:37,232 INFO    MainThread:268725 [wandb_run.py:_redirect():2324] Wrapping output streams.
+2025-02-25 12:49:37,233 INFO    MainThread:268725 [wandb_run.py:_redirect():2349] Redirects installed.
+2025-02-25 12:49:37,479 INFO    MainThread:268725 [wandb_init.py:init():1009] run started, returning control to user process
+2025-02-25 12:49:37,597 INFO    MainThread:268725 [wandb_run.py:_finish():2134] finishing run kamrul-konok-centralesup-lec/p4m/hc15vg89
+2025-02-25 12:49:37,597 INFO    MainThread:268725 [wandb_run.py:_atexit_cleanup():2374] got exitcode: 0
+2025-02-25 12:49:37,598 INFO    MainThread:268725 [wandb_run.py:_restore():2356] restore
+2025-02-25 12:49:37,598 INFO    MainThread:268725 [wandb_run.py:_restore():2362] restore done
+2025-02-25 12:49:39,476 INFO    MainThread:268725 [wandb_run.py:_footer_history_summary_info():3976] rendering history
+2025-02-25 12:49:39,477 INFO    MainThread:268725 [wandb_run.py:_footer_history_summary_info():4008] rendering summary
+2025-02-25 12:49:39,478 INFO    MainThread:268725 [wandb_run.py:_footer_sync_info():3937] logging synced files

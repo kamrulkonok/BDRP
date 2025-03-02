@@ -1,0 +1,16 @@
+{"time":"2025-02-25T12:49:31.177338292+01:00","level":"INFO","msg":"stream: starting","core version":"0.19.4","symlink path":"/gpfs/workdir/islamm/wandb_draw/wandb/run-20250225_124929-hc15vg89/logs/debug-core.log"}
+{"time":"2025-02-25T12:49:31.442625817+01:00","level":"INFO","msg":"created new stream","id":"hc15vg89"}
+{"time":"2025-02-25T12:49:31.442752452+01:00","level":"INFO","msg":"stream: started","id":"hc15vg89"}
+{"time":"2025-02-25T12:49:31.442836843+01:00","level":"INFO","msg":"writer: Do: started","stream_id":"hc15vg89"}
+{"time":"2025-02-25T12:49:31.442875634+01:00","level":"INFO","msg":"handler: started","stream_id":"hc15vg89"}
+{"time":"2025-02-25T12:49:31.443004651+01:00","level":"INFO","msg":"sender: started","stream_id":"hc15vg89"}
+{"time":"2025-02-25T12:49:31.746845277+01:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-02-25T12:49:37.635293983+01:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-02-25T12:49:37.636630458+01:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-02-25T12:49:38.275102064+01:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-02-25T12:49:38.47077175+01:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2025-02-25T12:49:39.480065694+01:00","level":"INFO","msg":"stream: closing","id":"hc15vg89"}
+{"time":"2025-02-25T12:49:39.480176984+01:00","level":"INFO","msg":"handler: closed","stream_id":"hc15vg89"}
+{"time":"2025-02-25T12:49:39.480220796+01:00","level":"INFO","msg":"writer: Close: closed","stream_id":"hc15vg89"}
+{"time":"2025-02-25T12:49:39.480250676+01:00","level":"INFO","msg":"sender: closed","stream_id":"hc15vg89"}
+{"time":"2025-02-25T12:49:39.480872706+01:00","level":"INFO","msg":"stream: closed","id":"hc15vg89"}
