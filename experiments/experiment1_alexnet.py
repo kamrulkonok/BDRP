@@ -1,19 +1,33 @@
 import os
 import sys
+import cv2
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import random
 import wandb
-import torch.distributed as dist
-from torch.utils.data import Subset
+import time
+import math
+
 from collections import defaultdict
-import matplotlib.pyplot as plt
 import argparse
 import shutil
-import torch.backends.cudnn as cudnn
-import torch
-import cv2
+
+from scipy.sparse import csr_matrix
+from PIL import Image
+from tqdm import tqdm
+import multiprocessing
+
+from sklearn.metrics.cluster import normalized_mutual_info_score, silhouette_score
 from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+import torch
+import torch.distributed as dist
+from torch.utils.data import Subset
+import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.nn as nn
 import torch.multiprocessing as mp
@@ -21,21 +35,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler, Dataset
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from scipy.sparse import csr_matrix
-import time
-import math
-from PIL import Image
-from tqdm import tqdm
-from sklearn.metrics.cluster import normalized_mutual_info_score, silhouette_score
-from sklearn.decomposition import PCA
-import multiprocessing
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from torch.profiler import profile, record_function, ProfilerActivity
 from torch.cuda.amp import autocast, GradScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
 
 # ---------------------------
 # Global Results Directory
@@ -52,120 +55,104 @@ torch.manual_seed(RANDOM_SEED)
 # ---------------------------
 # Dataset Definition
 # ---------------------------
-class ChestXrayDataset(Dataset):
+class ChestXrayDataset(torch.utils.data.Dataset):
     """
-    Chest X-ray dataset with:
-    - Sobel filtering (2-channel output)
-    - Random rotations (-R° to +R° augmentation)
+    Dataset for Chest X-ray images with random rotations.
+
+    Args:
+        root_dir (str): Path to the directory containing images.
+        transform (callable, optional): Transformation pipeline for images.
+        num_rotations (int): Number of random rotations to apply to each image.
     """
-    def __init__(self, root_dir, use_sobel=True, num_rotations=5, rotation_range=360):
+    def __init__(self, root_dir, transform=None, num_rotations=5):
         self.root_dir = root_dir
-        self.use_sobel = use_sobel
+        self.transform = transform
         self.num_rotations = num_rotations
-        self.rotation_range = rotation_range  # Maximum rotation angle
-        self.image_paths = [os.path.join(root_dir, fname) for fname in os.listdir(root_dir) 
-                            if fname.endswith(('.png', '.jpg', '.jpeg'))]
-    
+        self.image_paths = [os.path.join(root_dir, fname) for fname in os.listdir(root_dir) if fname.endswith(('.png', '.jpg', '.jpeg'))]
+
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.image_paths) * self.num_rotations
 
     def __getitem__(self, idx):
-        # Load image & convert to grayscale
         img_path = self.image_paths[idx]
         img = Image.open(img_path).convert("L")  # Convert to grayscale
 
-        # Resize to 64x64
-        img = img.resize((64, 64), Image.BILINEAR)
+        # Apply 5 random rotations between -360 and +360 degrees
+        rotated_images = []
+        for _ in range(self.num_rotations):
+            angle = random.uniform(-360, 360)
+            rotated_img = transforms.functional.rotate(img, angle)
+            if self.transform:
+                rotated_img = self.transform(rotated_img)
+            rotated_images.append(rotated_img)
+        rotated_images = torch.stack(rotated_images)
 
-        # Apply random rotations
-        rotated_images = self.apply_random_rotations(img)  # List of rotated PIL images
+        return rotated_images, idx
 
-        # Apply Sobel filter or convert to tensor
-        if self.use_sobel:
-            processed_images = [self.apply_sobel_filter(rotated) for rotated in rotated_images]  # (C=2, 64, 64)
-        else:
-            transform = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5], std=[0.5])
-            ])
-            processed_images = [transform(rotated) for rotated in rotated_images]  # (C=1, 64, 64)
-
-        # Stack all processed images together (num_rotations+1, C, 64, 64)
-        stacked_images = torch.stack(processed_images)  # Shape: (num_rotations+1, C, 64, 64)
-        
-        return stacked_images, idx  # Returns tensor (num_rotations+1 images) with ID
-
-    def apply_random_rotations(self, img):
-        """
-        Generate multiple rotated versions of the image.
-        """
-        angles = [random.uniform(-self.rotation_range, self.rotation_range) for _ in range(self.num_rotations)]
-        return [img] + [img.rotate(angle, resample=Image.BILINEAR) for angle in angles]  # Include original image
-
-    def apply_sobel_filter(self, img):
-        """
-        Apply Sobel filter to generate a 2-channel edge-detected image.
-        """
-        img_np = np.array(img, dtype=np.float32) / 255.0  # Normalize to range [0, 1]
-
-        # Apply Sobel filters
-        sobel_x = cv2.Sobel(img_np, cv2.CV_32F, 1, 0, ksize=3)
-        sobel_y = cv2.Sobel(img_np, cv2.CV_32F, 0, 1, ksize=3)
-
-        # Normalize gradients to range [-1, 1]
-        sobel_x = (sobel_x - sobel_x.mean()) / (sobel_x.std() + 1e-6)
-        sobel_y = (sobel_y - sobel_y.mean()) / (sobel_y.std() + 1e-6)
-
-        # Stack into 2-channel tensor
-        sobel_filtered = np.stack((sobel_x, sobel_y), axis=0)  # Shape: (2, 64, 64)
-        return torch.tensor(sobel_filtered, dtype=torch.float32)
-
-# ---------------------------
-# AlexNet Model Definition
-# ---------------------------
+# Initial transform for grayscale images
+initial_transform = transforms.Compose([
+    transforms.Resize((224, 224)), 
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5], std=[0.5])
+])
+ 
+# (number of filters, kernel size, stride, pad)
 CFG = {
-    '2012': [(96, 11, 4, 2), 'M', (256, 5, 1, 2), 'M', 
-             (384, 3, 1, 1), (384, 3, 1, 1), (256, 3, 1, 1), 'M']
+    '2012': [(96, 11, 4, 2), 'M', (256, 5, 1, 2), 'M', (384, 3, 1, 1), (384, 3, 1, 1), (256, 3, 1, 1), 'M']
 }
 
 class AlexNet(nn.Module):
-    def __init__(self, features, num_classes, input_dim=2): 
+    def __init__(self, features, num_classes, sobel):
         super(AlexNet, self).__init__()
         self.features = features
-        self.classifier = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(256 * 6 * 6, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True)
-        )
+        self.classifier = nn.Sequential(nn.Dropout(0.5),
+                            nn.Linear(256 * 6 * 6, 4096),
+                            nn.ReLU(inplace=True),
+                            nn.Dropout(0.5),
+                            nn.Linear(4096, 4096),
+                            nn.ReLU(inplace=True))
+
         self.top_layer = nn.Linear(4096, num_classes)
         self._initialize_weights()
 
+        if sobel:
+            sobel_filter = nn.Conv2d(1, 2, kernel_size=3, stride=1, padding=1) 
+            sobel_filter.weight.data[0, 0].copy_(
+                torch.FloatTensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]])
+            )
+            sobel_filter.weight.data[1, 0].copy_(
+                torch.FloatTensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
+            )
+            sobel_filter.bias.data.zero_()
+            self.sobel = sobel_filter
+            for p in self.sobel.parameters():
+                p.requires_grad = False
+        else:
+            self.sobel = None
+
+# print dimension of all the tensors
     def forward(self, x, return_features=True):
-        if x.dim() == 5: 
-            batch_size, num_rotations, C, H, W = x.shape
-            x = x.view(batch_size * num_rotations, C, H, W)  
-
+        if self.sobel:
+            x = self.sobel(x)
         x = self.features(x)
-
+        print(f"Shape of x before view: {x.shape}")  # Debug
         if return_features:
+            # check the shape of the return features (32*256*6*6, and after flatten the feature is 32*9216) 
+            # Kmeans expects column vector as input but the return features are matrix so we need to flatten it
             return x.view(x.size(0), -1) 
-
         x = x.view(x.size(0), 256 * 6 * 6)
         x = self.classifier(x)
-
         if self.top_layer:
             x = self.top_layer(x)
-
         return x
+
+# The x is the input batch of images which is (32*2*224*224) tensor, not a single 1D 
 
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, (2. / n) ** 0.5)
+                m.weight.data.normal_(0, math.sqrt(2. / n))
                 if m.bias is not None:
                     m.bias.data.zero_()
             elif isinstance(m, nn.BatchNorm2d):
@@ -177,27 +164,22 @@ class AlexNet(nn.Module):
 
 def make_layers_features(cfg, input_dim, bn):
     layers = []
-    in_channels = input_dim  # Ensure the correct number of input channels (2 for Sobel)
-    
+    in_channels = input_dim
     for v in cfg:
         if v == 'M':
-            layers.append(nn.MaxPool2d(kernel_size=3, stride=2))
+            layers += [nn.MaxPool2d(kernel_size=3, stride=2)]
         else:
             conv2d = nn.Conv2d(in_channels, v[0], kernel_size=v[1], stride=v[2], padding=v[3])
             if bn:
-                layers.extend([conv2d, nn.BatchNorm2d(v[0]), nn.ReLU(inplace=True)])
+                layers += [conv2d, nn.BatchNorm2d(v[0]), nn.ReLU(inplace=True)]
             else:
-                layers.extend([conv2d, nn.ReLU(inplace=True)])
+                layers += [conv2d, nn.ReLU(inplace=True)]
             in_channels = v[0]
-
     return nn.Sequential(*layers)
 
-def alexnet(sobel=True, bn=True, out=200):
-    """
-    Create an AlexNet model with optional Sobel filtering.
-    """
-    input_dim = 2 if sobel else 1 
-    model = AlexNet(make_layers_features(CFG['2012'], input_dim, bn=bn), out, sobel)
+def alexnet(sobel=True, bn=True, out=100):
+    dim = 2 + int(not sobel)
+    model = AlexNet(make_layers_features(CFG['2012'], dim, bn=bn), out, sobel)
     return model
 
 # ---------------------------
@@ -217,31 +199,42 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-def compute_features(dataloader, model, N, device):
-    """
-    Extract features from the model and save them.
-    """
+def compute_features(dataloader, model, N, device, num_rotations=5):
+    print("Computing features...")
     model.eval()
-    features = []
-    
-    with torch.no_grad():
-        for i, (imgs, _) in enumerate(tqdm(dataloader, desc=f"Feature Extraction (GPU {device})")):
-            imgs = imgs.to(device, non_blocking=True)
-            batch_size, num_rotations, C, H, W = imgs.shape
-            imgs = imgs.view(batch_size * num_rotations, C, H, W) 
-            features_extracted = model.module.features(imgs) if isinstance(model, DDP) else model.features(imgs)
-            features_extracted = features_extracted.view(features_extracted.shape[0], -1).cpu()
-            features.append(features_extracted)
+    batch_time = AverageMeter()
+    end = time.time()
 
-    features = torch.cat(features)
+    features = None  # Initialize as None
+    start_idx = 0  # Track cumulative samples
 
-    # Save features on rank 0
-    dist.barrier()
-    if dist.get_rank() == 0:  
-        features_path = os.path.join(RESULT_DIR, "alexnet_features.npy")
-        np.save(features_path, features.numpy())
-        print(f"GPU {device}: Saved extracted features to '{features_path}'")
+    for i, (input_tensor, _) in enumerate(tqdm(dataloader)):
+        # Reshape and move to device
+        B, num_rotations, C, H, W = input_tensor.shape
+        input_tensor = input_tensor.view(B * num_rotations, C, H, W).to(device)
 
+        # Extract features
+        with torch.no_grad():
+            aux = model(input_tensor).cpu().numpy()
+
+        # Debugging output
+        print(f"Input tensor shape: {input_tensor.shape}")
+        print(f"Model output shape: {aux.shape}")
+
+        # Initialize feature matrix on the first batch
+        if features is None:
+            features = np.zeros((N * num_rotations, aux.shape[1]), dtype='float32')
+            print(f"Feature matrix shape: {features.shape}")
+
+        # Save extracted features
+        end_idx = start_idx + aux.shape[0]
+        features[start_idx:end_idx] = aux
+        start_idx = end_idx 
+
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    print(f"Feature extraction completed. Total time: {batch_time.sum:.2f} seconds")
     return features
 
 def preprocess_features(features, pca_dim):
@@ -346,11 +339,19 @@ def setup(rank, world_size):
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
+def cleanup():
+    dist.destroy_process_group()
+
 # ---------------------------
 # Training Function
 # ---------------------------
 def train(rank, world_size):
     setup(rank, world_size)
+
+    torch.cuda.empty_cache()
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
+
     start_time = time.time()
 
     # Initialize wandb on rank 0
@@ -365,25 +366,28 @@ def train(rank, world_size):
             "num_rotations": 5
         })
 
-    # Prepare dataset and dataloader (using only first 20% of the dataset)
+    # Prepare dataset and dataloader
     dataset_path = "/gpfs/workdir/islamm/datasets"
-    full_dataset = ChestXrayDataset(root_dir=dataset_path, use_sobel=True, num_rotations=5)
-    subset_size = int(0.002 * len(full_dataset))
-    subset_indices = list(range(subset_size))
+    full_dataset = ChestXrayDataset(root_dir=dataset_path, transform=initial_transform, num_rotations=5)
+    subset_size = int(0.2 * len(full_dataset))  # Use 20% of the dataset
+    subset_indices = list(range(subset_size)) 
     subset_dataset = Subset(full_dataset, subset_indices)
     if rank == 0:
-        print(f"Using first 20% of dataset: {subset_size} samples.")
+        print(f"Using first {subset_size} samples (0.1% of the dataset).")
+
+    # Distributed sampler and dataloader
     train_sampler = DistributedSampler(subset_dataset, num_replicas=world_size, rank=rank, shuffle=True)
     dataloader = DataLoader(
         subset_dataset,
         batch_size=BATCH_SIZE // world_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=8,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=2,
+        prefetch_factor=4,
         sampler=train_sampler
     )
+    print(f"GPU {rank}: DataLoader and Dataset prepared.")  # Debug
 
     # Initialize model, loss, optimizer, scaler, and scheduler
     model = alexnet(sobel=True, bn=True, out=NUM_CLUSTERS).to(rank)
@@ -393,10 +397,11 @@ def train(rank, world_size):
     scaler = GradScaler()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
-    # Initialize metrics dictionary to track time and loss
+    # Initialize metrics dictionary to track time, loss, and NMI
     training_metrics = {
         "epoch": [],
         "avg_loss": [],
+        "nmi": [],
         "epoch_time": [],
         "feature_extraction_time": [],
         "clustering_time": [],
@@ -405,6 +410,9 @@ def train(rank, world_size):
 
     # Path for saving model checkpoints
     checkpoint_base = os.path.join(RESULT_DIR, "alexnet_checkpoint_epoch")
+
+    # Variable to store previous cluster assignments for NMI calculation
+    prev_cluster_assignments = None
 
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -424,8 +432,15 @@ def train(rank, world_size):
             dist.barrier()
             with record_function("Feature Extraction"):
                 with torch.no_grad():
-                    features = compute_features(dataloader, model, len(subset_dataset), rank)
-                features = features.view(features.shape[0], -1)
+                    features = compute_features(dataloader, model, len(dataloader.dataset), rank, num_rotations=5)
+                    print(f"Type of features after compute_features: {type(features)}")
+                    print(f"Shape of features after compute_features: {features.shape}")
+
+                    # Convert to tensor and reshape
+                    features = torch.tensor(features, device=rank)
+                    features = features.view(features.shape[0], -1)
+                    print(f"Type of features after conversion: {type(features)}")
+                    print(f"Shape of features after reshaping: {features.shape}")
             feature_end_time = time.time()
             feat_time = feature_end_time - feature_start_time
             print(f"GPU {rank}: Feature Extraction Time: {feat_time:.2f} seconds")
@@ -445,13 +460,32 @@ def train(rank, world_size):
             if rank == 0:
                 print(f"GPU {rank}: Running PyTorch K-means clustering...")
                 cluster_assignments, _ = kmeans_pytorch(features, NUM_CLUSTERS, num_iters=100, tol=1e-4, verbose=True)
+                print(f"GPU {rank}: Cluster assignments device before moving to GPU: {cluster_assignments.device}")  # Debug
+                cluster_assignments = cluster_assignments.to(rank)
+                print(f"GPU {rank}: Cluster assignments device after moving to GPU: {cluster_assignments.device}")  # Debug
             else:
                 cluster_assignments = torch.full((features.shape[0],), -1, dtype=torch.long, device=rank)
+                print(f"GPU {rank}: Cluster assignments device (non-rank 0): {cluster_assignments.device}")  # Debug
             save_cluster_assignments(cluster_assignments)
             dist.broadcast(cluster_assignments, src=0)
             cluster_end_time = time.time()
             clust_time = cluster_end_time - cluster_start_time
             print(f"GPU {rank}: K-Means Clustering Time: {clust_time:.2f} seconds")
+
+            # ---------------------------
+            # NMI Score Calculation
+            # ---------------------------
+            if rank == 0:
+                if prev_cluster_assignments is not None:
+                    nmi = normalized_mutual_info_score(
+                        prev_cluster_assignments.cpu().numpy(),
+                        cluster_assignments.cpu().numpy()
+                    )
+                else:
+                    nmi = 0.0
+                print(f"GPU {rank}: NMI Score for epoch {epoch + 1}: {nmi:.4f}")
+            else:
+                nmi = 0.0
 
             # Create pseudo-label dataset based on clustering
             images_lists = [[] for _ in range(NUM_CLUSTERS)]
@@ -462,9 +496,10 @@ def train(rank, world_size):
                 pseudo_dataset,
                 batch_size=BATCH_SIZE // world_size,
                 shuffle=True,
-                num_workers=2,
+                num_workers=4,
                 pin_memory=True
             )
+            print(f"GPU {rank}: Pseudo-label dataset created.")  # Debug
 
             # CNN Training Phase on pseudo-labels
             model.train()
@@ -472,14 +507,32 @@ def train(rank, world_size):
             cnn_train_start_time = time.time()
             for imgs, pseudo_labels in tqdm(pseudo_dataloader, desc=f"Training on GPU {rank}"):
                 imgs, pseudo_labels = imgs.to(rank), pseudo_labels.to(rank)
+
+                # Reshape: (B, 5, C, H, W) → (B*5, C, H, W)
+                B, num_rotations, C, H, W = imgs.shape
+                imgs = imgs.view(B * num_rotations, C, H, W)
+
+                # Expand pseudo-labels to match the flattened batch
+                pseudo_labels = pseudo_labels.repeat_interleave(num_rotations)
+
+                # Debugging output
+                print(f"GPU {rank}: Input images device: {imgs.device}, Pseudo-labels device: {pseudo_labels.device}")  # Debug
+
+                # Forward pass with mixed precision
                 with autocast():
                     outputs = model(imgs, return_features=False)
                     loss = criterion(outputs, pseudo_labels)
+
+                # Backward pass and optimization
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+
+                # Update running loss
                 running_loss += loss.item()
+
+            # Compute average loss for the epoch
             avg_loss = running_loss / len(pseudo_dataloader)
             cnn_train_end_time = time.time()
             cnn_train_time = cnn_train_end_time - cnn_train_start_time
@@ -500,6 +553,7 @@ def train(rank, world_size):
                 wandb.log({
                     "epoch": epoch + 1,
                     "avg_loss": avg_loss,
+                    "nmi": nmi,
                     "epoch_time": epoch_time,
                     "feature_extraction_time": feat_time,
                     "clustering_time": clust_time,
@@ -523,6 +577,7 @@ def train(rank, world_size):
                 # Update training metrics dictionary
                 training_metrics["epoch"].append(epoch + 1)
                 training_metrics["avg_loss"].append(avg_loss)
+                training_metrics["nmi"].append(nmi)
                 training_metrics["epoch_time"].append(epoch_time)
                 training_metrics["feature_extraction_time"].append(feat_time)
                 training_metrics["clustering_time"].append(clust_time)
@@ -534,6 +589,9 @@ def train(rank, world_size):
                 df_metrics.to_csv(csv_path, index=False)
                 print(f"Epoch {epoch + 1}: Training metrics saved to '{csv_path}'")
 
+                # Update previous cluster assignments for the next epoch's NMI calculation
+                prev_cluster_assignments = cluster_assignments.clone()
+
             prof.step()
             print(f"GPU {rank}: Epoch {epoch + 1} Time: {epoch_time:.2f} seconds")
 
@@ -542,12 +600,15 @@ def train(rank, world_size):
     print(f"GPU {rank}: Total Training Time: {total_training_time / 60:.2f} minutes")
     if rank == 0:
         wandb.finish()
-    dist.destroy_process_group()
+    cleanup()
 
 # ---------------------------
 # Multi-GPU Training Launcher
 # ---------------------------
+def main():
+    world_size = torch.cuda.device_count()
+    print(f"Launching distributed training on {world_size} GPUs...")
+    mp.spawn(train, args=(world_size,), nprocs=world_size, join=True)
+
 if __name__ == "__main__":
-    print(f"Launching multi-GPU training on {WORLD_SIZE} GPUs...")
-    torch.multiprocessing.set_start_method("spawn", force=True)
-    mp.spawn(train, args=(WORLD_SIZE,), nprocs=WORLD_SIZE, join=True)
+    main()
