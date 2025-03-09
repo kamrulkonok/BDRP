@@ -216,14 +216,16 @@ def compute_features(dataloader, model, N, device, num_rotations=5):
         # Extract features
         with torch.no_grad():
             aux = model(input_tensor).cpu().numpy()
+            # aux = model(input_tensor).detach()
 
-        # Debugging output
+        # Debug
         print(f"Input tensor shape: {input_tensor.shape}")
         print(f"Model output shape: {aux.shape}")
 
         # Initialize feature matrix on the first batch
         if features is None:
             features = np.zeros((N * num_rotations, aux.shape[1]), dtype='float32')
+            # features = torch.empty((N * num_rotations, aux.shape[1]), device=device, dtype=torch.float32)
             print(f"Feature matrix shape: {features.shape}")
 
         # Save extracted features
@@ -322,9 +324,9 @@ def save_cluster_assignments(cluster_assignments, output_file=None):
 # ---------------------------
 # Training Parameters
 # ---------------------------
-NUM_EPOCHS = 100
+NUM_EPOCHS = 50
 NUM_CLUSTERS = 200
-PCA_DIM = 128
+PCA_DIM = 64
 BATCH_SIZE = 256
 LEARNING_RATE = 0.001
 WEIGHT_DECAY = 1e-5
@@ -369,11 +371,11 @@ def train(rank, world_size):
     # Prepare dataset and dataloader
     dataset_path = "/gpfs/workdir/islamm/datasets"
     full_dataset = ChestXrayDataset(root_dir=dataset_path, transform=initial_transform, num_rotations=5)
-    subset_size = int(0.2 * len(full_dataset))  # Use 20% of the dataset
+    subset_size = int(0.1 * len(full_dataset))  # Use 10% of the dataset
     subset_indices = list(range(subset_size)) 
     subset_dataset = Subset(full_dataset, subset_indices)
     if rank == 0:
-        print(f"Using first {subset_size} samples (0.1% of the dataset).")
+        print(f"Using first {subset_size} samples (10% of the dataset).")
 
     # Distributed sampler and dataloader
     train_sampler = DistributedSampler(subset_dataset, num_replicas=world_size, rank=rank, shuffle=True)
@@ -384,7 +386,7 @@ def train(rank, world_size):
         num_workers=8,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=4,
+        prefetch_factor=2,
         sampler=train_sampler
     )
     print(f"GPU {rank}: DataLoader and Dataset prepared.")  # Debug
@@ -433,6 +435,17 @@ def train(rank, world_size):
             with record_function("Feature Extraction"):
                 with torch.no_grad():
                     features = compute_features(dataloader, model, len(dataloader.dataset), rank, num_rotations=5)
+
+                    # print("Before empty_cache:")
+                    # print(f"GPU memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                    # print(f"GPU memory cached: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+
+                    # torch.cuda.empty_cache()
+
+                    # print("After empty_cache:")
+                    # print(f"GPU memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                    # print(f"GPU memory cached: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+
                     print(f"Type of features after compute_features: {type(features)}")
                     print(f"Shape of features after compute_features: {features.shape}")
 
@@ -475,17 +488,16 @@ def train(rank, world_size):
             # ---------------------------
             # NMI Score Calculation
             # ---------------------------
+            nmi = 0.0 
+
+            if prev_cluster_assignments is not None and rank == 0:
+                nmi = normalized_mutual_info_score(
+                    prev_cluster_assignments.cpu().numpy(),
+                    cluster_assignments.cpu().numpy()
+                )
+
             if rank == 0:
-                if prev_cluster_assignments is not None:
-                    nmi = normalized_mutual_info_score(
-                        prev_cluster_assignments.cpu().numpy(),
-                        cluster_assignments.cpu().numpy()
-                    )
-                else:
-                    nmi = 0.0
-                print(f"GPU {rank}: NMI Score for epoch {epoch + 1}: {nmi:.4f}")
-            else:
-                nmi = 0.0
+                print(f"Epoch {epoch+1}: NMI Score: {nmi:.4f}")
 
             # Create pseudo-label dataset based on clustering
             images_lists = [[] for _ in range(NUM_CLUSTERS)]
@@ -496,8 +508,9 @@ def train(rank, world_size):
                 pseudo_dataset,
                 batch_size=BATCH_SIZE // world_size,
                 shuffle=True,
-                num_workers=4,
-                pin_memory=True
+                num_workers=8,
+                pin_memory=True,
+                drop_last=True
             )
             print(f"GPU {rank}: Pseudo-label dataset created.")  # Debug
 
