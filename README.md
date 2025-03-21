@@ -80,7 +80,6 @@ pip install -r requirements.txt
 ## Support, Feedback, Contributing
 This project is open to feature requests, suggestions, and bug reports via [GitHub Issues](https://github.com/kamrulkonok/bdrp_project/issues). Contribution and feedback are encouraged and always welcome.  
 
-For more information about how to contribute, the project structure, as well as additional contribution guidelines, see our [Contribution Guidelines](https://github.com/kamrulkonok/bdrp_project/blob/main/CONTRIBUTING.md).
 
 ## Acknowledgements
 We would like to express our heartfelt gratitude to our supervisors [Akash Malhotra](https://www.linkedin.com/in/akash-malhotra13/) and Prof. [Nacéra Seghouani](https://www.linkedin.com/in/nac%C3%A9ra-seghouani-65454013/), for their invaluable guidance, continuous support, and insightful feedback throughout the project's development.
