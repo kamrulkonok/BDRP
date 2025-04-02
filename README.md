@@ -83,3 +83,7 @@ This project is open to feature requests, suggestions, and bug reports via [GitH
 
 ## Acknowledgements
 We would like to express our heartfelt gratitude to our supervisors [Akash Malhotra](https://www.linkedin.com/in/akash-malhotra13/) and Prof. [Nacéra Seghouani](https://www.linkedin.com/in/nac%C3%A9ra-seghouani-65454013/), for their invaluable guidance, continuous support, and insightful feedback throughout the project's development.
+
+Teammate: 
+1. [Xianyun Zhuang](https://www.linkedin.com/in/echozhuang112358/)
+2. [Md Kamrul Islam](https://www.linkedin.com/in/kamrulkonok/)
